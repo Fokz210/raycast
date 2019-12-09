@@ -3,6 +3,7 @@
 ////////////////////////////////
 #include <cuda_runtime.h>             
 #include <device_launch_parameters.h>
+#include <curand.h>
 
 ////////////////////////////////
 //-----------SFML-------------//
@@ -43,7 +44,11 @@ int main ()
 	float theta = 0.4f;
 	
 	sphere sphs[2] = { sphere (vector3f (0.f, 0.f, 0.3f), 0.1f, vector3f (1.f, 1.f, 1.f)),
-					   sphere (vector3f (0.f, 0.f, -1000.f), 0.f, vector3f (0.3f, 0.7f, 0.3f)) };
+					   sphere (vector3f (0.f, 0.f, -1000.f), 1000.f, vector3f (0.3f, 0.7f, 0.3f)) };
+
+	sphere * sphs_vptr = nullptr;
+	cudaMalloc (&sphs_vptr, sizeof (sphere) * 2);
+	cudaMemcpy (sphs_vptr, sphs, sizeof (sphere) * 2, cudaMemcpyHostToDevice);
 
 	while (window.is_open())
 	{
@@ -63,7 +68,7 @@ int main ()
 			vector3f (0.f, 0.f, 0.3f)
 		);
 
-		render <<< window.width() * window.height() / threads, threads >>> (device_mem, window.width (), window.height (), sphs, 2, cam);
+		render <<< window.width() * window.height() / threads, threads >>> (device_mem, window.width (), window.height (), sphs_vptr, 2, cam);
 		cudaMemcpy (window.memory (), device_mem, window.width () * window.height () * sizeof (sfml_context::color), cudaMemcpyDeviceToHost);
 		window.update ();
 	}
@@ -80,10 +85,12 @@ __device__ vector3f ray_cast (ray const & r, sphere * sphs, int sphere_count) no
 
 	for (int i = 0; i < sphere_count; i++)
 	{
-		float prev = dist;
 		sphere::intersection new_intersection = sphs[i].ray_intersect (r, dist);
 
-		if (prev >= dist) in = new_intersection;
+		if (new_intersection.happened && (in.happened && dot (in.pos - r.pos, in.pos - r.pos) > dot (new_intersection.pos - r.pos, new_intersection.pos - r.pos) || !in.happened))
+		{
+			in = new_intersection;
+		}
 	}
 
 	return in.color;
@@ -105,4 +112,20 @@ __global__ void render (sfml_context::color * const colorbuffer, int const width
 		static_cast <sf::Uint8> (255 * color.z),
 		255
 	};
+}
+
+__device__ vector3f hemi_vector3f (vector3f const & norm, float const rand1, float const rand2)
+{
+	vector3f const x0 = cross (norm, vector3f (0.f, 0.f, 1.f));
+	vector3f x;
+	if (dot (x0, x0) < 1e-4)
+		x = normalize (cross (norm, vector3f (0.f, 1.f, 0.f)));
+	else
+		x = normalize (x0);
+	vector3f const y = cross (norm, x);
+
+	float const cos_theta = sqrtf (rand1);
+	float const sin_theta = sqrtf (1.f - rand1);
+	float const phi = rand2 * 3.14159265f * 2.f;
+	return x * cos_theta * cos (phi) + y * cos_theta * sin (phi) + norm * sin_theta;
 }
